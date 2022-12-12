@@ -1,73 +1,60 @@
 use std::{
-    io::{self, stdout, Result, Write},
+    io::{self, Result},
     sync::{mpsc::Sender, Arc, RwLock},
-    thread,
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
 pub trait Server {
-    fn connect(&mut self);
-    fn disconnect(&mut self);
-    fn on_message(&mut self) -> Result<()>;
-    fn on_connect(&mut self);
-    fn on_close(&self);
+    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>>;
+    fn disconnect(&self);
 }
 
-pub struct Shell {
-    pub tx: Sender<String>,
-    pub shutdown: Arc<RwLock<bool>>,
+#[derive(Debug)]
+pub struct Empty {
+    accepted: Option<Arc<RwLock<bool>>>,
 }
 
-impl Shell {
-    pub fn new(tx: Sender<String>, shutdown: Arc<RwLock<bool>>) -> Self {
-        Shell { tx, shutdown }
+impl Empty {
+    pub fn new() -> Self {
+        Empty { accepted: None }
     }
 }
 
-impl Server for Shell {
-    fn connect(&mut self) {
+impl Default for Empty {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Server for Empty {
+    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>> {
         log::trace!("connect");
-        self.on_connect();
-    }
-
-    fn disconnect(&mut self) {
-        log::trace!("disconnect");
-        self.on_close();
-    }
-
-    // stream 이라하고,
-    fn on_message(&mut self) -> Result<()> {
-        log::trace!("on_message");
-        let stdin = io::stdin();
-        let mut stdout = stdout();
-        let dur = Duration::from_millis(10);
-        loop {
-            {
-                let shutdown = self.shutdown.read().unwrap();
-                if *shutdown {
-                    break;
-                }
+        let lock0 = Arc::new(RwLock::new(true));
+        let lock1 = Arc::clone(&lock0);
+        self.accepted = Some(lock0);
+        let handle = thread::spawn(move || {
+            let stdin = io::stdin();
+            let dur = Duration::from_millis(10);
+            while *(lock1.read().unwrap()) {
+                let mut buf = String::new();
+                stdin.read_line(&mut buf).unwrap();
+                let message = buf.trim();
+                tx.send(message.to_string()).expect("send fail");
+                // sleep 을 주지 않으면 disconnect 에 의해 accepted 값이
+                // 변경되기 전에 loop 로 들어와서 표준입력을 기다림 -> 뭐라도 눌러야 종료되는 상황
+                thread::sleep(dur);
             }
+        });
 
-            let mut buf = String::new();
-            print!("you> ");
-            stdout.flush()?;
-            stdin.read_line(&mut buf)?;
-            let message = buf.trim();
-            self.tx.send(message.to_string()).expect("send fail");
-            thread::sleep(dur);
+        Ok(handle)
+    }
+
+    fn disconnect(&self) {
+        log::trace!("disconnect");
+        if let Some(lock) = &self.accepted {
+            let mut lock = lock.write().unwrap();
+            *lock = false;
         }
-
-        self.disconnect();
-        Ok(())
-    }
-
-    fn on_connect(&mut self) {
-        log::trace!("on_connect");
-        self.on_message().ok();
-    }
-
-    fn on_close(&self) {
-        log::trace!("on_close");
     }
 }
