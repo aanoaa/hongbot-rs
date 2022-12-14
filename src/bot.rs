@@ -6,7 +6,6 @@ use std::{
 
 use crate::server::{Empty, Server};
 
-#[derive(Debug)]
 pub struct Bot {
     pub name: String,
     // server params...
@@ -14,7 +13,6 @@ pub struct Bot {
 }
 
 // trait 으로 interface 명확하게 하자
-
 impl Bot {
     pub fn new(name: &str) -> Self {
         Bot {
@@ -22,6 +20,7 @@ impl Bot {
             running: false,
         }
     }
+
     pub fn run(&mut self) {
         self.running = true;
 

@@ -85,6 +85,7 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "log",
+ "regex",
 ]
 
 [[package]]

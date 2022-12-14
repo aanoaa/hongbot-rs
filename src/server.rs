@@ -1,12 +1,12 @@
 use std::{
-    io::{self, Result},
+    io,
     sync::{mpsc::Sender, Arc, RwLock},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 pub trait Server {
-    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>>;
+    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>, &str>;
     fn disconnect(&self);
 }
 
@@ -28,7 +28,7 @@ impl Default for Empty {
 }
 
 impl Server for Empty {
-    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>> {
+    fn connect(&mut self, tx: Sender<String>) -> Result<JoinHandle<()>, &str> {
         log::trace!("connect");
         let lock0 = Arc::new(RwLock::new(true));
         let lock1 = Arc::clone(&lock0);
@@ -36,9 +36,9 @@ impl Server for Empty {
         let handle = thread::spawn(move || {
             let stdin = io::stdin();
             let dur = Duration::from_millis(10);
-            while *(lock1.read().unwrap()) {
+            while *(lock1.read().expect("acquire read lock fail")) {
                 let mut buf = String::new();
-                stdin.read_line(&mut buf).unwrap();
+                stdin.read_line(&mut buf).expect("read fail");
                 let message = buf.trim();
                 tx.send(message.to_string()).expect("send fail");
                 // sleep 을 주지 않으면 disconnect 에 의해 accepted 값이
@@ -53,7 +53,7 @@ impl Server for Empty {
     fn disconnect(&self) {
         log::trace!("disconnect");
         if let Some(lock) = &self.accepted {
-            let mut lock = lock.write().unwrap();
+            let mut lock = lock.write().expect("acquire write lock fail");
             *lock = false;
         }
     }
