@@ -16,8 +16,8 @@ pub enum ServerType {
 type Callback = dyn Fn(&Bot, &str, &str, &str);
 
 pub struct Bot {
-    pub name: String,
-    pub server_type: ServerType,
+    name: String,
+    server_type: ServerType,
     reaction: HashMap<String, Box<Callback>>,
     resp: HashMap<String, Box<Callback>>,
     running: bool,
