@@ -24,7 +24,12 @@ impl Bot {
     pub fn run(&mut self) {
         self.running = true;
 
-        let mut server = Empty::default();
+        // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
+        let mut server: Box<dyn Server> = match &self.server {
+            ServerType::Empty => Box::<Empty>::default(),
+            ServerType::Shell => Box::<Shell>::default(),
+        };
+
         let (tx, rx) = channel::<String>();
         let j_handles = vec![server.connect(tx).unwrap()];
 
