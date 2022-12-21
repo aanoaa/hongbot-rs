@@ -7,7 +7,10 @@ use std::{
 
 use regex::Regex;
 
-use crate::server::{Server, Shell};
+use crate::{
+    action::Action,
+    server::{Server, Shell},
+};
 
 pub enum ServerType {
     Shell,
@@ -72,6 +75,7 @@ impl Bot {
 
     pub fn run(&mut self) {
         self.running = true;
+        self.install_actions();
 
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
         let mut server: Box<dyn Server> = match &self.server_type {
@@ -80,7 +84,7 @@ impl Bot {
 
         let (tx, rx) = channel::<(String, String, String)>();
         self.sender = Some(tx.clone());
-        let j_handles = vec![server.connect(tx).unwrap()];
+        let mut handlers = vec![server.connect(tx).unwrap()];
 
         while self.running {
             let (channel, nick, got) = rx.recv().unwrap();
@@ -109,7 +113,7 @@ impl Bot {
                 }
             }
         }
-        self.finalize(j_handles);
+        self.finalize(&mut handlers);
     }
 
     pub fn shutdown(&mut self) {
@@ -117,12 +121,16 @@ impl Bot {
         self.running = false;
     }
 
-    pub fn finalize(&self, handles: Vec<JoinHandle<()>>) {
+    pub fn finalize(&self, handlers: &mut Vec<JoinHandle<()>>) {
         log::trace!("finalize...");
-        for h in handles {
+        while let Some(h) = handlers.pop() {
             h.join().expect("couldn't join thread");
         }
         log::trace!("finalize...done");
+    }
+
+    fn install_actions(&mut self) {
+        self.hear("ping", &Action::ping);
     }
 }
 
