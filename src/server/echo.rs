@@ -14,7 +14,6 @@ const DEFAULT_ECHO_PORT: i32 = 8080;
 #[derive(Debug)]
 pub struct Echo {
     accepted: Option<Arc<RwLock<bool>>>,
-    handle: Option<JoinHandle<()>>,
     port: i32,
     tx: Option<Sender<(String, String, String)>>,
 }
@@ -24,7 +23,6 @@ impl Echo {
         let port = port.unwrap_or(DEFAULT_ECHO_PORT);
         Echo {
             accepted: None,
-            handle: None,
             port,
             tx: None,
         }
@@ -46,9 +44,9 @@ impl Server for Echo {
         let lock1 = Arc::clone(&lock0);
 
         self.accepted = Some(lock0);
-        self.tx = Some(tx0);
+        self.tx = Some(tx0.clone());
 
-        let handle = thread::spawn(move || {
+        thread::spawn(move || {
             log::trace!("{addr0} echo server started");
             let listener = TcpListener::bind(addr0).unwrap();
             while let Ok((stream, addr)) = listener.accept() {
@@ -58,8 +56,6 @@ impl Server for Echo {
                 });
             }
         });
-
-        self.handle = Some(handle);
 
         Ok(thread::spawn(move || {
             // wait for echo server ready
@@ -77,17 +73,15 @@ impl Server for Echo {
                 let mut stdout = io::stdout();
                 let mut buf = String::new();
                 loop {
-                    // TODO: 입력은 echo server 로 보내고,
-                    // 받은 데이터는 bot 으로 전달해야 함
-                    // stdin 을 여기에서 처리하는 게 맞을까?
-                    // bot 이 send 해야 하는데..
-                    print!("you> ");
+                    let channel = String::from("echo");
+                    let nick = String::from("you");
+                    print!("{:>7}#{}> ", nick, channel);
                     stdout.flush().unwrap();
                     stdin.read_line(&mut buf).expect("read fail");
                     stream.write_all(buf.as_bytes()).unwrap();
-                    // 서버에도 보내고 bot 에도 보낸다?
-                    // 근데 이건 server 구현이니까
-                    buf.clear();
+                    let message = buf.trim();
+                    tx0.send((channel, nick, message.to_string()))
+                        .expect("send fail");
 
                     thread::sleep(dur);
 
