@@ -9,11 +9,13 @@ use regex::Regex;
 
 use crate::{
     action::Action,
-    server::{Server, Shell},
+    server::{echo::Echo, irc::Irc, shell::Shell, Server},
 };
 
 pub enum ServerType {
     Shell,
+    Irc,
+    Echo,
 }
 
 type Callback = dyn Fn(&Bot, &str, &str, &str);
@@ -80,6 +82,8 @@ impl Bot {
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
         let mut server: Box<dyn Server> = match &self.server_type {
             ServerType::Shell => Box::<Shell>::default(),
+            ServerType::Irc => Box::<Irc>::default(),
+            ServerType::Echo => Box::<Echo>::default(),
         };
 
         let (tx, rx) = channel::<(String, String, String)>();
@@ -89,8 +93,9 @@ impl Bot {
         while self.running {
             let (channel, nick, got) = rx.recv().unwrap();
             let message = got.trim();
+
             if nick.ne("you") {
-                println!("{}> {}", nick, message);
+                println!("{:>7}#{}> {}", nick, channel, message);
             }
 
             if has_shutdown(message) {
@@ -113,6 +118,7 @@ impl Bot {
                 }
             }
         }
+
         self.finalize(&mut handlers);
     }
 
