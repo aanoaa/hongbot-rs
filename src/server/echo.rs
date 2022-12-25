@@ -83,6 +83,7 @@ impl Server for Echo {
                     tx0.send((channel, nick, message.to_string()))
                         .expect("send fail");
 
+                    buf.clear();
                     thread::sleep(dur);
 
                     let accepted = lock1.read().unwrap();
