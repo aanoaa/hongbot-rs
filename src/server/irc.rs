@@ -25,19 +25,20 @@ pub struct Irc {
 
 #[derive(Debug, PartialEq)]
 enum IrcCommand {
-    PING,
-    PONG,
-    USER,
-    PRIVMSG,
-    JOIN,
+    Ping,
+    Pong,
+    User,
+    Privmsg,
+    Join,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct IrcMessage {
     raw: String,
-    nick: Option<String>,
     servername: Option<String>,
     hostname: Option<String>,
+    nick: Option<String>,
     command: IrcCommand,
     params: String,
 }
@@ -79,19 +80,19 @@ impl IrcMessage {
         s = s[1..].to_vec();
 
         let command = match cmd.to_lowercase().as_str() {
-            "ping" => Ok(IrcCommand::PING),
-            "pong" => Ok(IrcCommand::PONG),
-            "user" => Ok(IrcCommand::USER),
-            "privmsg" => Ok(IrcCommand::PRIVMSG),
-            "join" => Ok(IrcCommand::JOIN),
+            "ping" => Ok(IrcCommand::Ping),
+            "pong" => Ok(IrcCommand::Pong),
+            "user" => Ok(IrcCommand::User),
+            "privmsg" => Ok(IrcCommand::Privmsg),
+            "join" => Ok(IrcCommand::Join),
             _ => Err(IrcError::UnknownCommand),
         }?;
 
         Ok(Self {
             raw: raw.to_string(),
-            nick,
             servername,
             hostname,
+            nick,
             command,
             params: s.join(" "),
         })
@@ -109,14 +110,22 @@ impl Irc {
     }
 }
 
+const IRC_DEFAULT_BOT_NAME: &str = "hongbot";
+const IRC_DEFAULT_BOT_REALNAME: &str = "hongbot";
+const IRC_DEFAULT_ADDR: &str = "localhost:6667";
+
 impl Default for Irc {
     fn default() -> Self {
-        Self::new("hongbot", "localhost:6667")
+        Self::new(IRC_DEFAULT_BOT_NAME, IRC_DEFAULT_ADDR)
     }
 }
 
 impl Server for Irc {
     fn connect(&mut self, tx: Sender<Message>) -> Result<JoinHandle<()>> {
+        // 1. pass (optional)
+        // 2. nick
+        // 3. user
+        // 4. pong (resp ping)
         let nick = self.nick.clone();
         let addr = self.server.clone();
 
@@ -138,51 +147,25 @@ impl Server for Irc {
             loop {
                 match stream1.read(&mut buf) {
                     Ok(size) => {
-                        if size == 0 {
-                            continue;
-                        }
-                        log::trace!("read {} bytes", size);
                         let message =
                             std::str::from_utf8(&buf[0..size]).expect("unexpected string bytes");
                         let message = String::from(message);
-                        log::trace!("{}", message);
+                        // cleanup buffer
                         buf[0..size].iter_mut().for_each(|x| *x = 0);
 
                         // ignore unknown commands
                         let irc_msg = IrcMessage::from(&message).ok();
                         if let Some(msg) = irc_msg {
                             match msg.command {
-                                IrcCommand::PING => {
-                                    let command = format!("PONG {}", msg.params);
-                                    log::trace!("{:?}", command);
-                                    stream1.write_all(command.as_bytes()).unwrap();
+                                IrcCommand::Ping => {
+                                    handle_ping(&mut stream1, msg);
                                 }
-                                IrcCommand::PRIVMSG => {
-                                    let nick = if let Some(nick) = msg.nick {
-                                        nick
-                                    } else {
-                                        "".to_string()
-                                    };
-
-                                    let s = msg.params.split(' ').collect::<Vec<&str>>();
-                                    if s.len() < 2 {
-                                        // ignore
-                                        log::error!("unexpected message");
-                                        continue;
-                                    }
-
-                                    // server 로 부터 받은 메세지를 bot 으로 relay
-                                    // 여기에서 받은 메세제를 parse 해서 후 처리
-                                    let channel = String::from(s[0]);
-                                    let message = s[1..].join(" ");
-                                    tx.send(Message {
-                                        channel,
-                                        nick,
-                                        message,
-                                    })
-                                    .expect("send fail");
+                                IrcCommand::Privmsg => {
+                                    handle_privmsg(&tx, msg);
                                 }
-                                _ => {}
+                                _ => {
+                                    log::trace!("{:?}", msg);
+                                }
                             }
                         }
                     }
@@ -203,54 +186,35 @@ impl Server for Irc {
             }
         });
 
-        let dur = Duration::from_millis(5000);
-        thread::sleep(dur);
+        let dur = Duration::from_millis(3000);
 
-        let mut cmd = format!("NICK {}{}", nick, CRLF);
-        match stream0.write_all(cmd.as_bytes()) {
-            Ok(()) => {
-                log::trace!("wrote {:?}", &cmd);
-            }
-            Err(e) => {
-                log::error!("wrote {:?} fail: {e}", &cmd);
-            }
-        }
-
+        stream0
+            .write_all(format!("NICK {}{CRLF}", nick).as_bytes())
+            .expect("send NICK cmd fail");
         thread::sleep(dur);
 
         // Parameters: <username> <hostname> <servername> <realname>
+        //
         // USER guest tolmoon tolsun :Ronnie Reagan
-        //                                 ; User registering themselves with a
-        //                                 username of "guest" and real name
-        //                                 "Ronnie Reagan".
-
+        // ; User registering themselves with a username of "guest" and real name "Ronnie Reagan".
+        //
         // :testnick USER guest tolmoon tolsun :Ronnie Reagan
-        //                                 ; message between servers with the
-        //                                 nickname for which the USER command
-        //                                 belongs to
-
-        // configuration 으로 부터 compose
-        cmd = format!("USER {} * * :hongbot-rs{}", nick, CRLF);
-        match stream0.write_all(cmd.as_bytes()) {
-            Ok(()) => {
-                log::trace!("wrote {:?}", &cmd);
-            }
-            Err(e) => {
-                log::error!("wrote {:?} fail: {e}", &cmd);
-            }
-        }
-
+        // ; message between servers with the nickname for which the USER command belongs to
+        stream0
+            .write_all(
+                format!(
+                    "USER {} * * :{}{CRLF}",
+                    IRC_DEFAULT_BOT_NAME, IRC_DEFAULT_BOT_REALNAME
+                )
+                .as_bytes(),
+            )
+            .expect("send USER cmd fail");
         thread::sleep(dur);
 
-        cmd = format!("JOIN #foo{}", CRLF);
-        match stream0.write_all(cmd.as_bytes()) {
-            Ok(()) => {
-                log::trace!("wrote {:?}", &cmd);
-            }
-            Err(e) => {
-                log::error!("wrote {:?} fail: {e}", &cmd);
-            }
-        }
+        stream0
+            .write_all(format!("JOIN #foo{CRLF}").as_bytes())
+            .expect("send JOIN cmd fail");
+
         Ok(handle)
     }
 
@@ -277,6 +241,28 @@ impl Server for Irc {
     }
 }
 
+fn handle_ping(stream: &mut TcpStream, msg: IrcMessage) {
+    let command = format!("PONG {}{CRLF}", msg.params);
+    stream.write_all(command.as_bytes()).unwrap();
+}
+
+fn handle_privmsg(tx: &Sender<Message>, msg: IrcMessage) {
+    let nick = msg.nick.unwrap_or_else(|| "unknown".to_string());
+    let params = msg.params.split(' ').collect::<Vec<&str>>();
+    if params.len() < 2 {
+        log::error!("unexpected privmsg format: {:?}", msg.params);
+        return;
+    }
+    let channel = String::from(params[0]);
+    let message = params[1..].join(" ");
+    tx.send(Message {
+        channel,
+        nick,
+        message,
+    })
+    .expect("tx send fail");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,37 +271,37 @@ mod tests {
     fn test_irc_message_parse() {
         let msg = IrcMessage::from(":test!~test@test.com PRIVMSG #channel :Hi!").unwrap();
         assert_eq!(msg.raw, ":test!~test@test.com PRIVMSG #channel :Hi!");
-        assert_eq!(msg.command, IrcCommand::PRIVMSG);
-        assert_eq!(msg.params, "#channel :Hi!");
-        assert_eq!(msg.nick, Some("test".to_string()));
         assert_eq!(msg.servername, Some("~test".to_string()));
         assert_eq!(msg.hostname, Some("test.com".to_string()));
+        assert_eq!(msg.command, IrcCommand::Privmsg);
+        assert_eq!(msg.params, "#channel :Hi!");
+        assert_eq!(msg.nick, Some("test".to_string()));
 
         // ping message
         let msg = IrcMessage::from("PING; :ynrYzp}[Bx").unwrap();
         assert_eq!(msg.raw, "PING; :ynrYzp}[Bx");
-        assert_eq!(msg.command, IrcCommand::PING);
-        assert_eq!(msg.params, ":ynrYzp}[Bx");
-        assert_eq!(msg.nick, None);
         assert_eq!(msg.servername, None);
         assert_eq!(msg.hostname, None);
+        assert_eq!(msg.command, IrcCommand::Ping);
+        assert_eq!(msg.params, ":ynrYzp}[Bx");
+        assert_eq!(msg.nick, None);
 
         // direct message from aanoaa -> hongbot
         let msg = IrcMessage::from(":aanoaa!user@172.21.0.1 PRIVMSG hongbot :bye").unwrap();
         assert_eq!(msg.raw, ":aanoaa!user@172.21.0.1 PRIVMSG hongbot :bye");
-        assert_eq!(msg.command, IrcCommand::PRIVMSG);
-        assert_eq!(msg.params, "hongbot :bye");
-        assert_eq!(msg.nick, Some("aanoaa".to_string()));
         assert_eq!(msg.servername, Some("user".to_string()));
         assert_eq!(msg.hostname, Some("172.21.0.1".to_string()));
+        assert_eq!(msg.command, IrcCommand::Privmsg);
+        assert_eq!(msg.params, "hongbot :bye");
+        assert_eq!(msg.nick, Some("aanoaa".to_string()));
 
         // #foo channel message
         let msg = IrcMessage::from(":aanoaa!user@172.21.0.1 PRIVMSG #foo :good").unwrap();
         assert_eq!(msg.raw, ":aanoaa!user@172.21.0.1 PRIVMSG #foo :good");
-        assert_eq!(msg.command, IrcCommand::PRIVMSG);
-        assert_eq!(msg.params, "#foo :good");
-        assert_eq!(msg.nick, Some("aanoaa".to_string()));
         assert_eq!(msg.servername, Some("user".to_string()));
         assert_eq!(msg.hostname, Some("172.21.0.1".to_string()));
+        assert_eq!(msg.command, IrcCommand::Privmsg);
+        assert_eq!(msg.params, "#foo :good");
+        assert_eq!(msg.nick, Some("aanoaa".to_string()));
     }
 }

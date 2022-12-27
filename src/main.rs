@@ -5,7 +5,7 @@ fn main() {
     dotenvy::dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info,hongbot=trace"));
 
-    let mut bot = Bot::new("hongbot", ServerType::Shell);
+    let mut bot = Bot::new("hongbot", ServerType::Irc);
     bot.run();
     log::trace!("done");
 }
