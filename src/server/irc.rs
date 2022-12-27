@@ -18,6 +18,7 @@ pub struct Irc {
     pub nick: String,
     pub server: String,
     accepted: Option<Arc<RwLock<bool>>>,
+    stream: Option<TcpStream>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,6 +102,7 @@ impl Irc {
             nick: nick.to_string(),
             server: server.to_string(),
             accepted: None,
+            stream: None,
         }
     }
 }
@@ -119,134 +121,130 @@ impl Server for Irc {
         let lock0 = Arc::new(RwLock::new(false));
         let lock1 = Arc::clone(&lock0);
         self.accepted = Some(lock0);
+
+        let mut stream0 = TcpStream::connect(addr)?;
+        self.stream = Some(stream0.try_clone().unwrap());
+        log::trace!("Connected to the server!");
+        {
+            let mut accepted = lock1.write().unwrap();
+            *accepted = true;
+        }
+
+        let mut stream1 = stream0.try_clone().expect("stream clone fail");
         let handle = thread::spawn(move || {
-            // https://www.rfc-editor.org/rfc/rfc1459#section-4.1
-            // The recommended order for a client to register is as follows:
-            // 1. Pass message
-            // 2. Nick message
-            // 3. User message
-            // + response ping message
-            if let Ok(mut stream) = TcpStream::connect(addr) {
-                log::trace!("Connected to the server!");
-                {
-                    let mut accepted = lock1.write().unwrap();
-                    *accepted = true;
-                }
+            let mut buf = [0; 4096];
+            loop {
+                match stream1.read(&mut buf) {
+                    Ok(size) => {
+                        if size == 0 {
+                            continue;
+                        }
+                        log::trace!("read {} bytes", size);
+                        let message =
+                            std::str::from_utf8(&buf[0..size]).expect("unexpected string bytes");
+                        let message = String::from(message);
+                        log::trace!("{}", message);
+                        buf[0..size].iter_mut().for_each(|x| *x = 0);
 
-                let mut s = stream.try_clone().expect("stream clone fail");
-                thread::spawn(move || {
-                    let mut buf = [0; 4096];
-                    loop {
-                        match s.read(&mut buf) {
-                            Ok(size) => {
-                                if size == 0 {
-                                    continue;
+                        // ignore unknown commands
+                        let irc_msg = IrcMessage::from(&message).ok();
+                        if let Some(msg) = irc_msg {
+                            match msg.command {
+                                IrcCommand::PING => {
+                                    let command = format!("PONG {}", msg.params);
+                                    log::trace!("{:?}", command);
+                                    stream1.write_all(command.as_bytes()).unwrap();
                                 }
-                                log::trace!("read {} bytes", size);
-                                let message = std::str::from_utf8(&buf[0..size])
-                                    .expect("unexpected string bytes");
-                                let message = String::from(message);
-                                log::trace!("{}", message);
-                                buf[0..size].iter_mut().for_each(|x| *x = 0);
+                                IrcCommand::PRIVMSG => {
+                                    let nick = if let Some(nick) = msg.nick {
+                                        nick
+                                    } else {
+                                        "".to_string()
+                                    };
 
-                                // ignore unknown commands
-                                let irc_msg = IrcMessage::from(&message).ok();
-                                if let Some(msg) = irc_msg {
-                                    match msg.command {
-                                        IrcCommand::PING => {
-                                            let command = format!("PONG {}", msg.params);
-                                            log::trace!("{:?}", command);
-                                            s.write_all(command.as_bytes()).unwrap();
-                                        }
-                                        IrcCommand::PRIVMSG => {
-                                            let nick = if let Some(nick) = msg.nick {
-                                                nick
-                                            } else {
-                                                "".to_string()
-                                            };
-
-                                            let s = msg.params.split(' ').collect::<Vec<&str>>();
-                                            if s.len() < 2 {
-                                                // ignore
-                                                log::error!("unexpected message");
-                                                continue;
-                                            }
-
-                                            let channel = String::from(s[0]);
-                                            let message = s[1..].join(" ");
-                                            tx.send((channel, nick, message.trim().to_string()))
-                                                .expect("send fail");
-                                        }
-                                        _ => {}
+                                    let s = msg.params.split(' ').collect::<Vec<&str>>();
+                                    if s.len() < 2 {
+                                        // ignore
+                                        log::error!("unexpected message");
+                                        continue;
                                     }
+
+                                    // server 로 부터 받은 메세지를 bot 으로 relay
+                                    // 여기에서 받은 메세제를 parse 해서 후 처리
+                                    let channel = String::from(s[0]);
+                                    let message = s[1..].join(" ");
+                                    tx.send((channel, nick, message.trim().to_string()))
+                                        .expect("send fail");
                                 }
-                            }
-                            Err(e) => {
-                                log::error!("read fail: {e}");
-                                s.shutdown(std::net::Shutdown::Both).unwrap();
-                                break;
+                                _ => {}
                             }
                         }
-
-                        let accepted = lock1.read().unwrap();
-                        if !*accepted {
-                            s.shutdown(std::net::Shutdown::Both).expect("shutdown fail");
-                            break;
-                        }
-                    }
-                });
-
-                let dur = Duration::from_millis(5000);
-                thread::sleep(dur);
-
-                let mut cmd = format!("NICK {}{}", nick, CRLF);
-                match stream.write_all(cmd.as_bytes()) {
-                    Ok(()) => {
-                        log::trace!("wrote {:?}", &cmd);
                     }
                     Err(e) => {
-                        //
-                        log::error!("wrote {:?} fail: {e}", &cmd);
+                        log::error!("read fail: {e}");
+                        stream1.shutdown(std::net::Shutdown::Both).unwrap();
+                        break;
                     }
                 }
 
-                thread::sleep(dur);
-
-                // Parameters: <username> <hostname> <servername> <realname>
-                // USER guest tolmoon tolsun :Ronnie Reagan
-                //                                 ; User registering themselves with a
-                //                                 username of "guest" and real name
-                //                                 "Ronnie Reagan".
-
-                // :testnick USER guest tolmoon tolsun :Ronnie Reagan
-                //                                 ; message between servers with the
-                //                                 nickname for which the USER command
-                //                                 belongs to
-
-                // configuration 으로 부터 compose
-                cmd = format!("USER {} * * :hongbot-rs{}", nick, CRLF);
-                match stream.write_all(cmd.as_bytes()) {
-                    Ok(()) => {
-                        log::trace!("wrote {:?}", &cmd);
-                    }
-                    Err(e) => {
-                        log::error!("wrote {:?} fail: {e}", &cmd);
-                    }
-                }
-
-                thread::sleep(dur);
-
-                cmd = format!("JOIN #foo{}", CRLF);
-                match stream.write_all(cmd.as_bytes()) {
-                    Ok(()) => {
-                        log::trace!("wrote {:?}", &cmd);
-                    }
-                    Err(e) => {
-                        log::error!("wrote {:?} fail: {e}", &cmd);
-                    }
+                let accepted = lock1.read().unwrap();
+                if !*accepted {
+                    stream1
+                        .shutdown(std::net::Shutdown::Both)
+                        .expect("shutdown fail");
+                    break;
                 }
             }
         });
+
+        let dur = Duration::from_millis(5000);
+        thread::sleep(dur);
+
+        let mut cmd = format!("NICK {}{}", nick, CRLF);
+        match stream0.write_all(cmd.as_bytes()) {
+            Ok(()) => {
+                log::trace!("wrote {:?}", &cmd);
+            }
+            Err(e) => {
+                log::error!("wrote {:?} fail: {e}", &cmd);
+            }
+        }
+
+        thread::sleep(dur);
+
+        // Parameters: <username> <hostname> <servername> <realname>
+        // USER guest tolmoon tolsun :Ronnie Reagan
+        //                                 ; User registering themselves with a
+        //                                 username of "guest" and real name
+        //                                 "Ronnie Reagan".
+
+        // :testnick USER guest tolmoon tolsun :Ronnie Reagan
+        //                                 ; message between servers with the
+        //                                 nickname for which the USER command
+        //                                 belongs to
+
+        // configuration 으로 부터 compose
+        cmd = format!("USER {} * * :hongbot-rs{}", nick, CRLF);
+        match stream0.write_all(cmd.as_bytes()) {
+            Ok(()) => {
+                log::trace!("wrote {:?}", &cmd);
+            }
+            Err(e) => {
+                log::error!("wrote {:?} fail: {e}", &cmd);
+            }
+        }
+
+        thread::sleep(dur);
+
+        cmd = format!("JOIN #foo{}", CRLF);
+        match stream0.write_all(cmd.as_bytes()) {
+            Ok(()) => {
+                log::trace!("wrote {:?}", &cmd);
+            }
+            Err(e) => {
+                log::error!("wrote {:?} fail: {e}", &cmd);
+            }
+        }
         Ok(handle)
     }
 
@@ -255,6 +253,20 @@ impl Server for Irc {
         if let Some(lock) = &self.accepted {
             let mut lock = lock.write().expect("acquire write lock fail");
             *lock = false;
+        }
+    }
+
+    fn send(&mut self, channel: &str, message: &str) {
+        if let Some(stream) = &mut self.stream {
+            let command = format!("PRIVMSG {} {}{}", channel, message, CRLF);
+            match stream.write_all(command.as_bytes()) {
+                Ok(()) => {
+                    log::trace!("wrote {:?}", &command);
+                }
+                Err(e) => {
+                    log::error!("wrote {:?} fail: {e}", &command);
+                }
+            }
         }
     }
 }

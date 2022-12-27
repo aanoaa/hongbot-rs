@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     str::FromStr,
-    sync::mpsc::{channel, Sender},
+    sync::{
+        mpsc::{channel, Sender},
+        Arc, Mutex,
+    },
     thread::JoinHandle,
 };
 
@@ -27,6 +30,7 @@ pub struct Bot {
     resp: HashMap<String, Box<Callback>>,
     running: bool,
     sender: Option<Sender<(String, String, String)>>,
+    server: Option<Arc<Mutex<Box<dyn Server>>>>,
 }
 
 impl Bot {
@@ -38,6 +42,7 @@ impl Bot {
             reaction: HashMap::new(),
             resp: HashMap::new(),
             sender: None,
+            server: None,
         }
     }
 
@@ -54,6 +59,7 @@ impl Bot {
     }
 
     pub fn send(&self, channel: &str, message: &str) {
+        // 이거 필요없음
         if let Some(tx) = &self.sender {
             tx.send((
                 channel.to_string(),
@@ -61,6 +67,10 @@ impl Bot {
                 message.to_string(),
             ))
             .expect("send fail");
+        }
+
+        if let Some(s) = &self.server {
+            s.lock().unwrap().send(channel, message);
         }
     }
 
@@ -73,6 +83,12 @@ impl Bot {
             ))
             .expect("send fail");
         }
+
+        if let Some(s) = &self.server {
+            s.lock()
+                .unwrap()
+                .send(channel, &format!("{}: {}", nick, message));
+        }
     }
 
     pub fn run(&mut self) {
@@ -80,15 +96,18 @@ impl Bot {
         self.install_actions();
 
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
-        let mut server: Box<dyn Server> = match &self.server_type {
+        let server: Box<dyn Server> = match &self.server_type {
             ServerType::Shell => Box::<Shell>::default(),
             ServerType::Irc => Box::<Irc>::default(),
             ServerType::Echo => Box::<Echo>::default(),
         };
 
+        let server = Arc::new(Mutex::new(server));
+        self.server = Some(server.clone());
+
         let (tx, rx) = channel::<(String, String, String)>();
         self.sender = Some(tx.clone());
-        let mut handlers = vec![server.connect(tx).unwrap()];
+        let mut handlers = vec![server.lock().unwrap().connect(tx).unwrap()];
 
         while self.running {
             let (channel, nick, got) = rx.recv().unwrap();
@@ -99,7 +118,7 @@ impl Bot {
             }
 
             if has_shutdown(message) {
-                server.disconnect();
+                server.lock().unwrap().disconnect();
                 self.shutdown();
             }
 

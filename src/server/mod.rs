@@ -9,4 +9,5 @@ pub mod shell;
 pub trait Server {
     fn connect(&mut self, tx: Sender<(String, String, String)>) -> Result<JoinHandle<()>>;
     fn disconnect(&self);
+    fn send(&mut self, channel: &str, message: &str);
 }

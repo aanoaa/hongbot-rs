@@ -69,4 +69,5 @@ impl Server for Shell {
             *lock = false;
         }
     }
+    fn send(&mut self, channel: &str, message: &str) {}
 }

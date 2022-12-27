@@ -111,6 +111,8 @@ impl Server for Echo {
         // 타이밍 맞춰서 client 끊어지면 echo server 에 대한 shutdown
         // + join thread
     }
+
+    fn send(&mut self, channel: &str, message: &str) {}
 }
 
 fn handle_connection(mut stream: TcpStream) -> Result<()> {
