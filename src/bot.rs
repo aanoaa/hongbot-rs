@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     str::FromStr,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc, Mutex,
-    },
+    sync::{mpsc::channel, Arc, Mutex},
     thread::JoinHandle,
 };
 
@@ -12,37 +9,48 @@ use regex::Regex;
 
 use crate::{
     action::Action,
-    server::{echo::Echo, irc::Irc, shell::Shell, Server},
+    server::{irc::Irc, shell::Shell, Server},
 };
 
 pub enum ServerType {
     Shell,
     Irc,
-    Echo,
 }
 
 type Callback = dyn Fn(&Bot, &str, &str, &str);
 
+pub struct Message {
+    pub channel: String,
+    pub nick: String,
+    pub message: String,
+}
+
+impl Message {
+    pub fn trim(&self) -> &str {
+        self.message.trim()
+    }
+}
+
 pub struct Bot {
     name: String,
-    server_type: ServerType,
     reaction: HashMap<String, Box<Callback>>,
     resp: HashMap<String, Box<Callback>>,
-    running: bool,
-    sender: Option<Sender<(String, String, String)>>,
-    server: Option<Arc<Mutex<Box<dyn Server>>>>,
+    server: Arc<Mutex<Box<dyn Server>>>,
 }
 
 impl Bot {
     pub fn new(name: &str, server_type: ServerType) -> Self {
+        // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
+        let server: Box<dyn Server> = match server_type {
+            ServerType::Shell => Box::<Shell>::default(),
+            ServerType::Irc => Box::<Irc>::default(),
+        };
+
         Bot {
             name: name.to_string(),
-            server_type,
-            running: false,
             reaction: HashMap::new(),
             resp: HashMap::new(),
-            sender: None,
-            server: None,
+            server: Arc::new(Mutex::new(server)),
         }
     }
 
@@ -59,102 +67,63 @@ impl Bot {
     }
 
     pub fn send(&self, channel: &str, message: &str) {
-        // 이거 필요없음
-        if let Some(tx) = &self.sender {
-            tx.send((
-                channel.to_string(),
-                self.name.to_string(),
-                message.to_string(),
-            ))
-            .expect("send fail");
-        }
-
-        if let Some(s) = &self.server {
-            s.lock().unwrap().send(channel, message);
-        }
+        self.server.lock().unwrap().send(channel, message);
     }
 
     pub fn reply(&self, channel: &str, nick: &str, message: &str) {
-        if let Some(tx) = &self.sender {
-            tx.send((
-                channel.to_string(),
-                self.name.to_string(),
-                format!("{}: {}", nick, message),
-            ))
-            .expect("send fail");
-        }
-
-        if let Some(s) = &self.server {
-            s.lock()
-                .unwrap()
-                .send(channel, &format!("{}: {}", nick, message));
-        }
+        self.server
+            .lock()
+            .unwrap()
+            .send(channel, &format!("{}: {}", nick, message));
     }
 
     pub fn run(&mut self) {
-        self.running = true;
         self.install_actions();
+        let server = self.server.clone();
+        let (tx, rx) = channel::<Message>();
+        let handle = server.lock().unwrap().connect(tx).unwrap();
+        loop {
+            let msg = rx.recv().unwrap();
+            let message = msg.trim();
 
-        // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
-        let server: Box<dyn Server> = match &self.server_type {
-            ServerType::Shell => Box::<Shell>::default(),
-            ServerType::Irc => Box::<Irc>::default(),
-            ServerType::Echo => Box::<Echo>::default(),
-        };
-
-        let server = Arc::new(Mutex::new(server));
-        self.server = Some(server.clone());
-
-        let (tx, rx) = channel::<(String, String, String)>();
-        self.sender = Some(tx.clone());
-        let mut handlers = vec![server.lock().unwrap().connect(tx).unwrap()];
-
-        while self.running {
-            let (channel, nick, got) = rx.recv().unwrap();
-            let message = got.trim();
-
-            if nick.ne("you") {
-                println!("{:>7}#{}> {}", nick, channel, message);
-            }
-
-            if has_shutdown(message) {
-                server.lock().unwrap().disconnect();
+            if has_shutdown(&message.to_lowercase()) {
                 self.shutdown();
+                break;
             }
 
+            // TODO 매번 regexp 를 compile 하지 않도록 해야 한다.
             for (pattern, cb) in &self.resp {
                 let pat = format!("{}:? +?{}", self.name, pattern);
                 let re = Regex::from_str(&pat).unwrap();
                 if re.is_match(message) {
-                    cb(self, &channel, &nick, message);
+                    cb(self, &msg.channel, &msg.nick, message);
                 }
             }
 
             for (pattern, cb) in &self.reaction {
                 let re = Regex::from_str(pattern).unwrap();
                 if re.is_match(message) {
-                    cb(self, &channel, &nick, message);
+                    cb(self, &msg.channel, &msg.nick, message);
                 }
             }
         }
 
-        self.finalize(&mut handlers);
+        self.finalize(handle);
     }
 
     pub fn shutdown(&mut self) {
         log::trace!("shutdown");
-        self.running = false;
+        self.server.lock().unwrap().disconnect();
     }
 
-    pub fn finalize(&self, handlers: &mut Vec<JoinHandle<()>>) {
+    pub fn finalize(&self, handle: JoinHandle<()>) {
         log::trace!("finalize...");
-        while let Some(h) = handlers.pop() {
-            h.join().expect("couldn't join thread");
-        }
+        handle.join().expect("join fail");
         log::trace!("finalize...done");
     }
 
     fn install_actions(&mut self) {
+        // conditional install?
         self.hear("ping", &Action::ping);
     }
 }

@@ -9,6 +9,8 @@ use std::{
 use anyhow::Result;
 use thiserror::Error;
 
+use crate::bot::Message;
+
 use super::Server;
 
 const CRLF: &str = "\r\n";
@@ -114,7 +116,7 @@ impl Default for Irc {
 }
 
 impl Server for Irc {
-    fn connect(&mut self, tx: Sender<(String, String, String)>) -> Result<JoinHandle<()>> {
+    fn connect(&mut self, tx: Sender<Message>) -> Result<JoinHandle<()>> {
         let nick = self.nick.clone();
         let addr = self.server.clone();
 
@@ -173,8 +175,12 @@ impl Server for Irc {
                                     // 여기에서 받은 메세제를 parse 해서 후 처리
                                     let channel = String::from(s[0]);
                                     let message = s[1..].join(" ");
-                                    tx.send((channel, nick, message.trim().to_string()))
-                                        .expect("send fail");
+                                    tx.send(Message {
+                                        channel,
+                                        nick,
+                                        message,
+                                    })
+                                    .expect("send fail");
                                 }
                                 _ => {}
                             }
