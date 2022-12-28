@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     io::{self, stdout, Write},
     sync::{mpsc::Sender, Arc, RwLock},
     thread::{self, JoinHandle},
@@ -13,28 +14,31 @@ use super::Server;
 
 #[derive(Debug)]
 pub struct Shell {
+    name: String,
     tx: Option<Sender<Message>>,
     accepted: Option<Arc<RwLock<bool>>>,
+    width: usize,
 }
 
 impl Shell {
-    pub fn new() -> Self {
+    pub fn new(name: String) -> Self {
+        let width = match &name.len().cmp(&SHELL_SERVER_NICK.len()) {
+            Ordering::Equal => SHELL_SERVER_NICK.len(),
+            Ordering::Less => SHELL_SERVER_NICK.len(),
+            Ordering::Greater => name.len(),
+        };
+
         Shell {
+            name,
             accepted: None,
             tx: None,
+            width,
         }
-    }
-}
-
-impl Default for Shell {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 const SHELL_SERVER_CHANNEL: &str = "#shell";
 const SHELL_SERVER_NICK: &str = "you";
-const SHELL_SERVER_BOT_NAME: &str = "bot";
 
 impl Server for Shell {
     fn connect(&mut self, tx: Sender<Message>) -> Result<JoinHandle<()>> {
@@ -43,13 +47,14 @@ impl Server for Shell {
         let lock1 = Arc::clone(&lock0);
         self.accepted = Some(lock0);
         self.tx = Some(tx.clone());
+        let width = self.width;
         let handle = thread::spawn(move || {
             let stdin = io::stdin();
             let dur = Duration::from_millis(10);
             let mut stdout = stdout();
             let mut buf = String::new();
             while *(lock1.read().expect("acquire read lock fail")) {
-                print!("{}{}> ", SHELL_SERVER_NICK, SHELL_SERVER_CHANNEL);
+                print!("{:>width$}{}> ", SHELL_SERVER_NICK, SHELL_SERVER_CHANNEL);
                 stdout.flush().unwrap();
                 stdin.read_line(&mut buf).expect("read fail");
                 tx.send(Message {
@@ -78,6 +83,7 @@ impl Server for Shell {
     }
 
     fn send(&mut self, channel: &str, message: &str) {
-        println!("{}{}> {}", SHELL_SERVER_BOT_NAME, channel, message);
+        let width = self.width;
+        println!("{:>width$}{}> {}", self.name, channel, message);
     }
 }
