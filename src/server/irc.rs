@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use thiserror::Error;
 
-use crate::bot::Message;
+use crate::{bot::Message, config::IrcConfig};
 
 use super::Server;
 
@@ -17,8 +17,7 @@ const CRLF: &str = "\r\n";
 
 #[derive(Debug)]
 pub struct Irc {
-    pub nick: String,
-    pub server: String,
+    config: IrcConfig,
     accepted: Option<Arc<RwLock<bool>>>,
     stream: Option<TcpStream>,
 }
@@ -100,23 +99,12 @@ impl IrcMessage {
 }
 
 impl Irc {
-    pub fn new(nick: &str, server: &str) -> Self {
+    pub fn new(config: IrcConfig) -> Self {
         Irc {
-            nick: nick.to_string(),
-            server: server.to_string(),
+            config,
             accepted: None,
             stream: None,
         }
-    }
-}
-
-const IRC_DEFAULT_BOT_NAME: &str = "hongbot";
-const IRC_DEFAULT_BOT_REALNAME: &str = "hongbot";
-const IRC_DEFAULT_ADDR: &str = "localhost:6667";
-
-impl Default for Irc {
-    fn default() -> Self {
-        Self::new(IRC_DEFAULT_BOT_NAME, IRC_DEFAULT_ADDR)
     }
 }
 
@@ -126,8 +114,8 @@ impl Server for Irc {
         // 2. nick
         // 3. user
         // 4. pong (resp ping)
-        let nick = self.nick.clone();
-        let addr = self.server.clone();
+        let nick = self.config.nick.clone();
+        let addr = self.config.addr.clone();
 
         let lock0 = Arc::new(RwLock::new(false));
         let lock1 = Arc::clone(&lock0);
@@ -141,6 +129,18 @@ impl Server for Irc {
             *accepted = true;
         }
 
+        let pass = self.config.pass.clone();
+        let channels = self.config.channels.clone();
+        let user = if let Some(user) = self.config.user.as_ref() {
+            user.clone()
+        } else {
+            nick.clone()
+        };
+        let realname = if let Some(user) = self.config.realname.as_ref() {
+            user.clone()
+        } else {
+            nick.clone()
+        };
         let mut stream1 = stream0.try_clone().expect("stream clone fail");
         let handle = thread::spawn(move || {
             let mut buf = [0; 4096];
@@ -186,12 +186,18 @@ impl Server for Irc {
             }
         });
 
-        let dur = Duration::from_millis(3000);
+        let sec = Duration::from_millis(1000);
+        if let Some(pass) = pass {
+            stream0
+                .write_all(format!("PASS {}{CRLF}", pass).as_bytes())
+                .expect("send PASS cmd fail");
+            thread::sleep(sec * 3);
+        }
 
         stream0
             .write_all(format!("NICK {}{CRLF}", nick).as_bytes())
             .expect("send NICK cmd fail");
-        thread::sleep(dur);
+        thread::sleep(sec * 3);
 
         // Parameters: <username> <hostname> <servername> <realname>
         //
@@ -201,19 +207,16 @@ impl Server for Irc {
         // :testnick USER guest tolmoon tolsun :Ronnie Reagan
         // ; message between servers with the nickname for which the USER command belongs to
         stream0
-            .write_all(
-                format!(
-                    "USER {} * * :{}{CRLF}",
-                    IRC_DEFAULT_BOT_NAME, IRC_DEFAULT_BOT_REALNAME
-                )
-                .as_bytes(),
-            )
+            .write_all(format!("USER {} * * :{}{CRLF}", user, realname).as_bytes())
             .expect("send USER cmd fail");
-        thread::sleep(dur);
+        thread::sleep(sec * 3);
 
-        stream0
-            .write_all(format!("JOIN #foo{CRLF}").as_bytes())
-            .expect("send JOIN cmd fail");
+        for ch in &channels {
+            stream0
+                .write_all(format!("JOIN {}{CRLF}", ch).as_bytes())
+                .expect("send JOIN cmd fail");
+            thread::sleep(sec);
+        }
 
         Ok(handle)
     }

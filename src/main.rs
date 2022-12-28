@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use hongbot_rs::{
-    bot::{Bot, ServerType},
-    config::Config,
-};
+use hongbot_rs::{bot::Bot, config::Config};
 
 fn main() {
     // initialize
@@ -12,6 +9,6 @@ fn main() {
     let config = Config::from(&PathBuf::from("config.toml")).expect("read config fail");
     log::trace!("{:#?}", config);
 
-    let mut bot = Bot::new("hongbot", ServerType::Shell);
+    let mut bot = Bot::new(config);
     bot.run();
 }

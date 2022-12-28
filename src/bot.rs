@@ -10,10 +10,11 @@ use serde::Deserialize;
 
 use crate::{
     action::Action,
+    config::Config,
     server::{irc::Irc, shell::Shell, Server},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServerType {
     Shell,
@@ -42,15 +43,17 @@ pub struct Bot {
 }
 
 impl Bot {
-    pub fn new(name: &str, server_type: ServerType) -> Self {
+    pub fn new(config: Config) -> Self {
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
-        let server: Box<dyn Server> = match server_type {
+        let server: Box<dyn Server> = match config.server {
             ServerType::Shell => Box::<Shell>::default(),
-            ServerType::Irc => Box::<Irc>::default(),
+            ServerType::Irc => Box::new(Irc::new(
+                config.irc.as_ref().expect("missing config").clone(),
+            )),
         };
 
         Bot {
-            name: name.to_string(),
+            name: config.name,
             reaction: HashMap::new(),
             resp: HashMap::new(),
             server: Arc::new(Mutex::new(server)),

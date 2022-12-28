@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::bot::ServerType;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub name: String,
     pub server: ServerType,
@@ -13,7 +13,7 @@ pub struct Config {
     pub irc: Option<IrcConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct IrcConfig {
     pub nick: String,
     pub user: Option<String>,
