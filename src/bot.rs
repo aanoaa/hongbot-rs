@@ -6,12 +6,15 @@ use std::{
 };
 
 use regex::Regex;
+use serde::Deserialize;
 
 use crate::{
     action::Action,
     server::{irc::Irc, shell::Shell, Server},
 };
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ServerType {
     Shell,
     Irc,

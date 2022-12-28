@@ -1,0 +1,11 @@
+name    = "hongbot"
+server  = "shell" # shell|irc
+scripts = ["ping"]
+
+[irc]
+nick       = "hongbot"
+# user     = "hongbot"
+# pass     = "secret"
+# realname = "hongbot"
+addr       = "localhost:6667"
+channels   = ["#foo", "#bar"]
