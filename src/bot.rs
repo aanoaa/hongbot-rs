@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    hash::{Hash, Hasher},
     str::FromStr,
     sync::{mpsc::channel, Arc, Mutex},
     thread::JoinHandle,
@@ -23,6 +24,28 @@ pub enum ServerType {
 
 type Callback = dyn Fn(&Bot, &str, &str, &str);
 
+// Regex does not impl PartialEq, Eq, Hash trait
+struct MyRegex(regex::Regex);
+
+impl PartialEq for MyRegex {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str().eq(other.0.as_str())
+    }
+}
+impl Eq for MyRegex {}
+
+impl MyRegex {
+    fn from_str(pat: &str) -> Self {
+        MyRegex(Regex::from_str(pat).unwrap())
+    }
+}
+
+impl Hash for MyRegex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_str().hash(state);
+    }
+}
+
 pub struct Message {
     pub channel: String,
     pub nick: String,
@@ -36,9 +59,8 @@ impl Message {
 }
 
 pub struct Bot {
-    name: String,
-    reaction: HashMap<String, Box<Callback>>,
-    resp: HashMap<String, Box<Callback>>,
+    reaction: HashMap<MyRegex, Box<Callback>>,
+    resp: HashMap<MyRegex, Box<Callback>>,
     server: Arc<Mutex<Box<dyn Server>>>,
 }
 
@@ -53,7 +75,6 @@ impl Bot {
         };
 
         Bot {
-            name: config.name,
             reaction: HashMap::new(),
             resp: HashMap::new(),
             server: Arc::new(Mutex::new(server)),
@@ -61,15 +82,13 @@ impl Bot {
     }
 
     pub fn hear(&mut self, pattern: &str, cb: &'static Callback) {
-        self.reaction
-            .entry(pattern.to_string())
-            .or_insert_with(|| Box::new(cb));
+        let re = MyRegex::from_str(pattern);
+        self.reaction.entry(re).or_insert_with(|| Box::new(cb));
     }
 
     pub fn respond(&mut self, pattern: &str, cb: &'static Callback) {
-        self.resp
-            .entry(pattern.to_string())
-            .or_insert_with(|| Box::new(cb));
+        let re = MyRegex::from_str(pattern);
+        self.resp.entry(re).or_insert_with(|| Box::new(cb));
     }
 
     pub fn send(&self, channel: &str, message: &str) {
@@ -97,18 +116,14 @@ impl Bot {
                 break;
             }
 
-            // TODO 매번 regexp 를 compile 하지 않도록 해야 한다.
             for (pattern, cb) in &self.resp {
-                let pat = format!("{}:? +?{}", self.name, pattern);
-                let re = Regex::from_str(&pat).unwrap();
-                if re.is_match(message) {
+                if pattern.0.is_match(message) {
                     cb(self, &msg.channel, &msg.nick, message);
                 }
             }
 
             for (pattern, cb) in &self.reaction {
-                let re = Regex::from_str(pattern).unwrap();
-                if re.is_match(message) {
+                if pattern.0.is_match(message) {
                     cb(self, &msg.channel, &msg.nick, message);
                 }
             }
