@@ -74,7 +74,7 @@ impl Server for Shell {
         Ok(handle)
     }
 
-    fn disconnect(&self) {
+    fn disconnect(&mut self) {
         log::trace!("disconnect");
         if let Some(lock) = &self.accepted {
             let mut lock = lock.write().expect("acquire write lock fail");

@@ -114,8 +114,8 @@ impl Bot {
             let msg = rx.recv().unwrap();
             let message = msg.trim();
 
-            if has_shutdown(&message.to_lowercase()) {
-                self.shutdown();
+            if has_shutdown(&self.name, &message.to_lowercase()) {
+                self.shutdown(Some(msg));
                 break;
             }
 
@@ -135,8 +135,11 @@ impl Bot {
         self.finalize(handle);
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&mut self, msg: Option<Message>) {
         log::trace!("shutdown");
+        if let Some(msg) = msg {
+            self.send(&msg.channel, "bye");
+        }
         self.server.lock().unwrap().disconnect();
     }
 
@@ -152,6 +155,22 @@ impl Bot {
     }
 }
 
-fn has_shutdown(s: &str) -> bool {
-    matches!(s, "exit" | "quit" | "bye")
+fn has_shutdown(name: &str, s: &str) -> bool {
+    if name.len() >= s.len() || name.ne(&s[0..name.len()]) {
+        return false;
+    }
+    matches!(s[(name.len() + 1)..].trim(), "shutdown")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_has_shutdown() {
+        let s = "hongbot: exit";
+        let name = "hongbot";
+        assert!(name.eq(&s[0..name.len()]));
+        assert_eq!(name, &s[0..name.len()]);
+        assert_eq!(&s[(name.len() + 2)..], "exit");
+        assert_eq!(s[(name.len() + 1)..].trim(), "exit");
+    }
 }

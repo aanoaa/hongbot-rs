@@ -178,9 +178,12 @@ impl Server for Irc {
 
                 let accepted = lock1.read().unwrap();
                 if !*accepted {
-                    stream1
-                        .shutdown(std::net::Shutdown::Both)
-                        .expect("shutdown fail");
+                    match stream1.shutdown(std::net::Shutdown::Both) {
+                        Ok(()) => (),
+                        Err(e) => {
+                            log::error!("shutdown fail: {e}");
+                        }
+                    }
                     break;
                 }
             }
@@ -221,25 +224,25 @@ impl Server for Irc {
         Ok(handle)
     }
 
-    fn disconnect(&self) {
+    fn disconnect(&mut self) {
         log::trace!("disconnect");
         if let Some(lock) = &self.accepted {
             let mut lock = lock.write().expect("acquire write lock fail");
             *lock = false;
+        }
+
+        if let Some(stream) = &mut self.stream {
+            let command = format!("QUIT :Bye{CRLF}");
+            stream.write_all(command.as_bytes()).unwrap();
         }
     }
 
     fn send(&mut self, channel: &str, message: &str) {
         if let Some(stream) = &mut self.stream {
             let command = format!("PRIVMSG {} {}{}", channel, message, CRLF);
-            match stream.write_all(command.as_bytes()) {
-                Ok(()) => {
-                    log::trace!("wrote {:?}", &command);
-                }
-                Err(e) => {
-                    log::error!("wrote {:?} fail: {e}", &command);
-                }
-            }
+            stream
+                .write_all(command.as_bytes())
+                .expect("write PRIVMSG fail");
         }
     }
 }
@@ -257,7 +260,10 @@ fn handle_privmsg(tx: &Sender<Message>, msg: IrcMessage) {
         return;
     }
     let channel = String::from(params[0]);
-    let message = params[1..].join(" ");
+    let mut message = params[1..].join(" ");
+    if message.starts_with(':') {
+        message = message[1..].to_string();
+    }
     tx.send(Message {
         channel,
         nick,
