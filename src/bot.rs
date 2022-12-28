@@ -59,6 +59,7 @@ impl Message {
 }
 
 pub struct Bot {
+    name: String,
     reaction: HashMap<MyRegex, Box<Callback>>,
     resp: HashMap<MyRegex, Box<Callback>>,
     server: Arc<Mutex<Box<dyn Server>>>,
@@ -68,13 +69,14 @@ impl Bot {
     pub fn new(config: Config) -> Self {
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
         let server: Box<dyn Server> = match config.server {
-            ServerType::Shell => Box::<Shell>::default(),
+            ServerType::Shell => Box::new(Shell::new(config.name.clone())),
             ServerType::Irc => Box::new(Irc::new(
                 config.irc.as_ref().expect("missing config").clone(),
             )),
         };
 
         Bot {
+            name: config.name,
             reaction: HashMap::new(),
             resp: HashMap::new(),
             server: Arc::new(Mutex::new(server)),
@@ -87,7 +89,8 @@ impl Bot {
     }
 
     pub fn respond(&mut self, pattern: &str, cb: &'static Callback) {
-        let re = MyRegex::from_str(pattern);
+        let pat = format!("{}:? +?{}", self.name, pattern);
+        let re = MyRegex::from_str(&pat);
         self.resp.entry(re).or_insert_with(|| Box::new(cb));
     }
 
@@ -145,7 +148,7 @@ impl Bot {
 
     fn install_actions(&mut self) {
         // conditional install?
-        self.hear("ping", &Action::ping);
+        self.respond("ping", &Action::ping);
     }
 }
 
