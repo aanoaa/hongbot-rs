@@ -10,5 +10,6 @@ fn main() {
     log::trace!("{:#?}", config);
 
     let mut bot = Bot::new(config);
+    bot.install_actions();
     bot.run();
 }

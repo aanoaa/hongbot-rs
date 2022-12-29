@@ -105,8 +105,7 @@ impl Bot {
             .send(channel, &format!("{}: {}", nick, message));
     }
 
-    pub fn run(&mut self) {
-        self.install_actions();
+    pub fn run(&self) {
         let server = self.server.clone();
         let (tx, rx) = channel::<Message>();
         let handle = server.lock().unwrap().connect(tx).unwrap();
@@ -135,7 +134,7 @@ impl Bot {
         self.finalize(handle);
     }
 
-    pub fn shutdown(&mut self, msg: Option<Message>) {
+    pub fn shutdown(&self, msg: Option<Message>) {
         log::trace!("shutdown");
         if let Some(msg) = msg {
             self.send(&msg.channel, "bye");
@@ -149,7 +148,7 @@ impl Bot {
         log::trace!("finalize...done");
     }
 
-    fn install_actions(&mut self) {
+    pub fn install_actions(&mut self) {
         // conditional install?
         self.respond("ping", &Action::ping);
     }
