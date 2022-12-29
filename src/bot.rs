@@ -22,7 +22,7 @@ pub enum ServerType {
     Irc,
 }
 
-type Callback = dyn Fn(&Bot, &str, &str, &str);
+type Callback = Box<dyn Fn(&Bot, &str, &str, &str)>;
 
 // Regex does not impl PartialEq, Eq, Hash trait
 struct MyRegex(regex::Regex);
@@ -60,8 +60,8 @@ impl Message {
 
 pub struct Bot {
     name: String,
-    reaction: HashMap<MyRegex, Box<Callback>>,
-    resp: HashMap<MyRegex, Box<Callback>>,
+    reaction: HashMap<MyRegex, Callback>,
+    resp: HashMap<MyRegex, Callback>,
     server: Arc<Mutex<Box<dyn Server>>>,
 }
 
@@ -83,12 +83,18 @@ impl Bot {
         }
     }
 
-    pub fn hear(&mut self, pattern: &str, cb: &'static Callback) {
+    pub fn hear<F>(&mut self, pattern: &str, cb: F)
+    where
+        F: Fn(&Bot, &str, &str, &str) + 'static,
+    {
         let re = MyRegex::from_str(pattern);
         self.reaction.entry(re).or_insert_with(|| Box::new(cb));
     }
 
-    pub fn respond(&mut self, pattern: &str, cb: &'static Callback) {
+    pub fn respond<F>(&mut self, pattern: &str, cb: F)
+    where
+        F: Fn(&Bot, &str, &str, &str) + 'static,
+    {
         let pat = format!("{}:? +?{}", self.name, pattern);
         let re = MyRegex::from_str(&pat);
         self.resp.entry(re).or_insert_with(|| Box::new(cb));
@@ -118,6 +124,7 @@ impl Bot {
                 break;
             }
 
+            // TODO: thread pool 을 만들어서 돌리자
             for (pattern, cb) in &self.resp {
                 if pattern.0.is_match(message) {
                     cb(self, &msg.channel, &msg.nick, message);
@@ -150,7 +157,7 @@ impl Bot {
 
     pub fn install_actions(&mut self) {
         // conditional install?
-        self.respond("ping", &Action::ping);
+        self.respond("ping", Action::ping);
     }
 }
 
