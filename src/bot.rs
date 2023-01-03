@@ -22,7 +22,7 @@ pub enum ServerType {
     Irc,
 }
 
-type Callback = Box<dyn Fn(&Bot, &str, &str, &str)>;
+type Callback = Box<dyn Fn(&Bot, String, String, String)>;
 
 // Regex does not impl PartialEq, Eq, Hash trait
 struct MyRegex(regex::Regex);
@@ -62,13 +62,13 @@ pub struct Bot {
     name: String,
     reaction: HashMap<MyRegex, Callback>,
     resp: HashMap<MyRegex, Callback>,
-    server: Arc<Mutex<Box<dyn Server>>>,
+    pub server: Arc<Mutex<Box<dyn Server + Send>>>,
 }
 
 impl Bot {
     pub fn new(config: Config) -> Self {
         // https://rust-unofficial.github.io/patterns/idioms/on-stack-dyn-dispatch.html
-        let server: Box<dyn Server> = match config.server {
+        let server: Box<dyn Server + Send> = match config.server {
             ServerType::Shell => Box::new(Shell::new(config.name.clone())),
             ServerType::Irc => Box::new(Irc::new(
                 config.irc.as_ref().expect("missing config").clone(),
@@ -85,7 +85,7 @@ impl Bot {
 
     pub fn hear<F>(&mut self, pattern: &str, cb: F)
     where
-        F: Fn(&Bot, &str, &str, &str) + 'static,
+        F: Fn(&Bot, String, String, String) + 'static,
     {
         let re = MyRegex::from_str(pattern);
         self.reaction.entry(re).or_insert_with(|| Box::new(cb));
@@ -93,7 +93,7 @@ impl Bot {
 
     pub fn respond<F>(&mut self, pattern: &str, cb: F)
     where
-        F: Fn(&Bot, &str, &str, &str) + 'static,
+        F: Fn(&Bot, String, String, String) + 'static,
     {
         let pat = format!("{}:? +?{}", self.name, pattern);
         let re = MyRegex::from_str(&pat);
@@ -127,13 +127,23 @@ impl Bot {
             // TODO: thread pool 을 만들어서 돌리자
             for (pattern, cb) in &self.resp {
                 if pattern.0.is_match(message) {
-                    cb(self, &msg.channel, &msg.nick, message);
+                    cb(
+                        self,
+                        msg.channel.clone(),
+                        msg.nick.clone(),
+                        message.to_string(),
+                    );
                 }
             }
 
             for (pattern, cb) in &self.reaction {
                 if pattern.0.is_match(message) {
-                    cb(self, &msg.channel, &msg.nick, message);
+                    cb(
+                        self,
+                        msg.channel.clone(),
+                        msg.nick.clone(),
+                        message.to_string(),
+                    );
                 }
             }
         }
@@ -158,6 +168,7 @@ impl Bot {
     pub fn install_actions(&mut self) {
         // conditional install?
         self.respond("ping", Action::ping);
+        self.respond("ping 1", Action::ping_with_delayed_pong);
     }
 }
 
