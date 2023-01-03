@@ -1,9 +1,12 @@
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
+    io::{self, Read, Write},
+    net::{TcpListener, TcpStream},
     str::FromStr,
     sync::{mpsc::channel, Arc, Mutex},
-    thread::JoinHandle,
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use regex::Regex;
@@ -112,6 +115,37 @@ impl Bot {
     }
 
     pub fn run(&self) {
+        // serve http
+        let running0 = Arc::new(Mutex::new(true));
+        let running1 = running0.clone();
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        listener
+            .set_nonblocking(true)
+            .expect("cannot set non-blocking");
+        let http_serve_handle = thread::spawn(move || {
+            log::info!("Listening for connections on port {}", 8080);
+            let dur = Duration::from_millis(100);
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        handle_client(stream);
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        if *running0.lock().unwrap() {
+                            thread::sleep(dur);
+                            continue;
+                        } else {
+                            drop(listener);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("http connect fail: {}", e);
+                    }
+                }
+            }
+        });
+
         let server = self.server.clone();
         let (tx, rx) = channel::<Message>();
         let handle = server.lock().unwrap().connect(tx).unwrap();
@@ -147,7 +181,11 @@ impl Bot {
             }
         }
 
-        self.finalize(handle);
+        {
+            let mut running = running1.lock().unwrap();
+            *running = false;
+        }
+        self.finalize(vec![handle, http_serve_handle]);
     }
 
     pub fn shutdown(&self, msg: Option<Message>) {
@@ -158,9 +196,11 @@ impl Bot {
         self.server.lock().unwrap().disconnect();
     }
 
-    pub fn finalize(&self, handle: JoinHandle<()>) {
+    pub fn finalize(&self, handles: Vec<JoinHandle<()>>) {
         log::trace!("finalize...");
-        handle.join().expect("join fail");
+        for handle in handles {
+            handle.join().expect("join fail");
+        }
         log::trace!("finalize...done");
     }
 
@@ -176,6 +216,36 @@ fn has_shutdown(name: &str, s: &str) -> bool {
         return false;
     }
     matches!(s[(name.len() + 1)..].trim(), "shutdown")
+}
+
+fn handle_client(stream: TcpStream) {
+    handle_read(&stream);
+    handle_write(stream);
+}
+
+fn handle_read(mut stream: &TcpStream) {
+    let mut buf = [0u8; 4096];
+    match stream.read(&mut buf) {
+        Ok(_) => {
+            let req = String::from_utf8_lossy(&buf);
+            log::trace!("{}", req);
+        }
+        Err(e) => {
+            log::error!("http read fail: {e}")
+        }
+    }
+}
+
+fn handle_write(mut stream: TcpStream) {
+    const CRLF: &str = "\n\r";
+    let resp =
+        format!("HTTP/1.1 200 OK{CRLF}Content-Type: text/plain; charset=UTF-8{CRLF}{CRLF}OK{CRLF}");
+    match stream.write(resp.as_bytes()) {
+        Ok(_) => (),
+        Err(e) => {
+            log::error!("http resp fail: {e}")
+        }
+    }
 }
 
 #[cfg(test)]
