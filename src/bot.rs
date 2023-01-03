@@ -124,7 +124,6 @@ impl Bot {
                 break;
             }
 
-            // TODO: thread pool 을 만들어서 돌리자
             for (pattern, cb) in &self.resp {
                 if pattern.0.is_match(message) {
                     cb(
@@ -168,7 +167,7 @@ impl Bot {
     pub fn install_actions(&mut self) {
         // conditional install?
         self.respond("ping", Action::ping);
-        self.respond("ping 1", Action::ping_with_delayed_pong);
+        self.respond("ipaddr", Action::ifconfig);
     }
 }
 

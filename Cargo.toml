@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.68"
 config = "0.13.3"
+curl = "0.4.44"
 dotenvy = "0.15.6"
 env_logger = "0.10.0"
 log = "0.4.17"
