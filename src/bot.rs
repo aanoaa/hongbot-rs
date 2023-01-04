@@ -1,12 +1,9 @@
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
-    io::{self, Read, Write},
-    net::{TcpListener, TcpStream},
     str::FromStr,
     sync::{mpsc::channel, Arc, Mutex},
-    thread::{self, JoinHandle},
-    time::Duration,
+    thread::JoinHandle,
 };
 
 use regex::{Captures, Regex};
@@ -15,6 +12,7 @@ use serde::Deserialize;
 use crate::{
     action::Action,
     config::Config,
+    http::serve,
     server::{irc::Irc, shell::Shell, Server},
 };
 
@@ -115,36 +113,8 @@ impl Bot {
     }
 
     pub fn run(&self) {
-        // serve http
-        let running0 = Arc::new(Mutex::new(true));
-        let running1 = running0.clone();
-        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
-        listener
-            .set_nonblocking(true)
-            .expect("cannot set non-blocking");
-        let http_serve_handle = thread::spawn(move || {
-            log::info!("Listening for connections on port {}", 8080);
-            let dur = Duration::from_millis(100);
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
-                        handle_client(stream);
-                    }
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        if *running0.lock().unwrap() {
-                            thread::sleep(dur);
-                            continue;
-                        } else {
-                            drop(listener);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("http connect fail: {}", e);
-                    }
-                }
-            }
-        });
+        let running = Arc::new(Mutex::new(true));
+        let http_serve_handle = serve("127.0.0.1:8080", running.clone()).unwrap();
 
         let server = self.server.clone();
         let (tx, rx) = channel::<Message>();
@@ -184,7 +154,7 @@ impl Bot {
         }
 
         {
-            let mut running = running1.lock().unwrap();
+            let mut running = running.lock().unwrap();
             *running = false;
         }
         self.finalize(vec![handle, http_serve_handle]);
@@ -218,36 +188,6 @@ fn has_shutdown(name: &str, s: &str) -> bool {
         return false;
     }
     matches!(s[(name.len() + 1)..].trim(), "shutdown" | "exit" | "quit")
-}
-
-fn handle_client(stream: TcpStream) {
-    handle_read(&stream);
-    handle_write(stream);
-}
-
-fn handle_read(mut stream: &TcpStream) {
-    let mut buf = [0u8; 4096];
-    match stream.read(&mut buf) {
-        Ok(_) => {
-            let req = String::from_utf8_lossy(&buf);
-            log::trace!("{}", req);
-        }
-        Err(e) => {
-            log::error!("http read fail: {e}")
-        }
-    }
-}
-
-fn handle_write(mut stream: TcpStream) {
-    const CRLF: &str = "\n\r";
-    let resp =
-        format!("HTTP/1.1 200 OK{CRLF}Content-Type: text/plain; charset=UTF-8{CRLF}{CRLF}OK{CRLF}");
-    match stream.write(resp.as_bytes()) {
-        Ok(_) => (),
-        Err(e) => {
-            log::error!("http resp fail: {e}")
-        }
-    }
 }
 
 #[cfg(test)]
