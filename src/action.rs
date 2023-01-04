@@ -1,17 +1,18 @@
 use std::{thread, time::Duration};
 
 use curl::easy::Easy;
+use regex::Captures;
 
 use crate::bot::Bot;
 
 pub struct Action {}
 
 impl Action {
-    pub fn ping(bot: &Bot, ch: String, nick: String, _msg: String) {
+    pub fn ping(bot: &Bot, ch: String, nick: String, _msg: String, _caps: Captures) {
         bot.reply(&ch, &nick, "pong");
     }
 
-    pub fn ping_delayed(bot: &Bot, ch: String, _nick: String, _msg: String) {
+    pub fn ping_delayed(bot: &Bot, ch: String, _nick: String, _msg: String, _caps: Captures) {
         let serv = bot.server.clone();
         thread::spawn(move || {
             // a long task here
@@ -20,7 +21,7 @@ impl Action {
         });
     }
 
-    pub fn ifconfig(bot: &Bot, ch: String, _nick: String, _msg: String) {
+    pub fn ifconfig(bot: &Bot, ch: String, _nick: String, _msg: String, _caps: Captures) {
         let serv = bot.server.clone();
         thread::spawn(move || {
             let mut easy = Easy::new();

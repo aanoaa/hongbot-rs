@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use regex::Regex;
+use regex::{Captures, Regex};
 use serde::Deserialize;
 
 use crate::{
@@ -25,7 +25,7 @@ pub enum ServerType {
     Irc,
 }
 
-type Callback = Box<dyn Fn(&Bot, String, String, String)>;
+type Callback = Box<dyn Fn(&Bot, String, String, String, Captures)>;
 
 // Regex does not impl PartialEq, Eq, Hash trait
 struct MyRegex(regex::Regex);
@@ -88,7 +88,7 @@ impl Bot {
 
     pub fn hear<F>(&mut self, pattern: &str, cb: F)
     where
-        F: Fn(&Bot, String, String, String) + 'static,
+        F: Fn(&Bot, String, String, String, Captures) + 'static,
     {
         let re = MyRegex::from_str(pattern);
         self.reaction.entry(re).or_insert_with(|| Box::new(cb));
@@ -96,7 +96,7 @@ impl Bot {
 
     pub fn respond<F>(&mut self, pattern: &str, cb: F)
     where
-        F: Fn(&Bot, String, String, String) + 'static,
+        F: Fn(&Bot, String, String, String, Captures) + 'static,
     {
         let pat = format!("{}:? +?{}", self.name, pattern);
         let re = MyRegex::from_str(&pat);
@@ -159,23 +159,25 @@ impl Bot {
             }
 
             for (pattern, cb) in &self.resp {
-                if pattern.0.is_match(message) {
+                if let Some(caps) = pattern.0.captures(message) {
                     cb(
                         self,
                         msg.channel.clone(),
                         msg.nick.clone(),
                         message.to_string(),
+                        caps,
                     );
                 }
             }
 
             for (pattern, cb) in &self.reaction {
-                if pattern.0.is_match(message) {
+                if let Some(caps) = pattern.0.captures(message) {
                     cb(
                         self,
                         msg.channel.clone(),
                         msg.nick.clone(),
                         message.to_string(),
+                        caps,
                     );
                 }
             }
@@ -215,7 +217,7 @@ fn has_shutdown(name: &str, s: &str) -> bool {
     if name.len() >= s.len() || name.ne(&s[0..name.len()]) {
         return false;
     }
-    matches!(s[(name.len() + 1)..].trim(), "shutdown")
+    matches!(s[(name.len() + 1)..].trim(), "shutdown" | "exit" | "quit")
 }
 
 fn handle_client(stream: TcpStream) {
@@ -250,6 +252,8 @@ fn handle_write(mut stream: TcpStream) {
 
 #[cfg(test)]
 mod tests {
+    use regex::Regex;
+
     #[test]
     fn test_has_shutdown() {
         let s = "hongbot: exit";
@@ -258,5 +262,19 @@ mod tests {
         assert_eq!(name, &s[0..name.len()]);
         assert_eq!(&s[(name.len() + 2)..], "exit");
         assert_eq!(s[(name.len() + 1)..].trim(), "exit");
+    }
+
+    #[test]
+    fn test_regex() {
+        let re = Regex::new(r"ping (\d+)").unwrap();
+        let caps = re.captures("ping ??");
+        assert!(caps.is_none());
+
+        let caps = re.captures("ping 5");
+        assert!(caps.is_some());
+        let caps = caps.unwrap();
+        assert_eq!(caps.len(), 2);
+        assert_eq!(caps.get(0).unwrap().as_str(), "ping 5");
+        assert_eq!(caps.get(1).unwrap().as_str(), "5");
     }
 }
