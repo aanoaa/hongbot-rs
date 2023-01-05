@@ -113,8 +113,7 @@ impl Bot {
     }
 
     pub fn run(&self) {
-        let running = Arc::new(Mutex::new(true));
-        let http_serve_handle = serve("127.0.0.1:8080", running.clone()).unwrap();
+        let (http_server, mut workers_handle) = serve("127.0.0.1:8080").unwrap();
 
         let server = self.server.clone();
         let (tx, rx) = channel::<Message>();
@@ -153,11 +152,14 @@ impl Bot {
             }
         }
 
-        {
-            let mut running = running.lock().unwrap();
-            *running = false;
+        // graceful shutdown http server
+        for _ in 0..workers_handle.len() {
+            http_server.unblock();
         }
-        self.finalize(vec![handle, http_serve_handle]);
+
+        let mut join_handles = vec![handle];
+        join_handles.append(&mut workers_handle);
+        self.finalize(join_handles);
     }
 
     pub fn shutdown(&self, msg: Option<Message>) {
