@@ -147,6 +147,19 @@ impl Bot {
         let server = self.server.clone();
         let (tx, rx) = channel::<Message>();
         let handle = server.lock().unwrap().connect(tx).unwrap();
+
+        // Global reserved pattern
+        // TODO fix this shit
+        // I'd like to handle it in the action hook,
+        // but I don't know how to modify the mutable hashmap in the closure of immutable loop (self.resp)
+        // http://smallcultfollowing.com/babysteps/blog/2018/11/01/after-nll-interprocedural-conflicts/
+        //
+        // you> bot: key is value # kv.set("key", "value")
+        let pat_kv = MyRegex::from_str(&format!("^{}:? +?{}", self.name, "(.+) is (.+)$"));
+        // you> bot: key?
+        // bot> value
+        let pat_whatis = MyRegex::from_str(&format!("^{}:? +?{}", self.name, "(.+)\\?$"));
+
         loop {
             let msg = rx.recv().unwrap();
             let text = msg.trim();
@@ -154,6 +167,16 @@ impl Bot {
             if has_shutdown(&self.name, &text.to_lowercase()) {
                 self.shutdown(Some(msg));
                 break;
+            }
+
+            if let Some(caps) = pat_kv.0.captures(text) {
+                self.set(caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+            }
+
+            if let Some(caps) = pat_whatis.0.captures(text) {
+                if let Some(v) = self.get(caps.get(1).unwrap().as_str()) {
+                    self.send(&msg.channel, v);
+                }
             }
 
             for (pattern, cb) in &self.resp {
