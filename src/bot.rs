@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
+    fs::File,
     hash::{Hash, Hasher},
+    io::{Read, Write},
     str::FromStr,
     sync::{mpsc::channel, Arc, Mutex},
     thread::JoinHandle,
@@ -63,8 +65,11 @@ pub struct Bot {
     name: String,
     reaction: HashMap<MyRegex, Callback>,
     resp: HashMap<MyRegex, Callback>,
+    state: HashMap<String, String>,
     pub server: Arc<Mutex<Box<dyn Server + Send>>>,
 }
+
+const STATE_FILE: &str = "state.dat";
 
 impl Bot {
     pub fn new(config: Config) -> Self {
@@ -76,11 +81,27 @@ impl Bot {
             )),
         };
 
+        // load state
+        let mut f = File::options()
+            .read(true)
+            .open(STATE_FILE)
+            .expect("state file open fail");
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).expect("state file read fail");
+        let state: HashMap<String, String> = if !buf.is_empty() {
+            bincode::deserialize(&buf).expect("state deserialize fail")
+        } else {
+            HashMap::new()
+        };
+
+        // log::trace!("{:#?}", state);
+
         Bot {
             name: config.name,
             reaction: HashMap::new(),
             resp: HashMap::new(),
             server: Arc::new(Mutex::new(server)),
+            state,
         }
     }
 
@@ -112,7 +133,15 @@ impl Bot {
             .send(channel, &format!("{}: {}", nick, message));
     }
 
-    pub fn run(&self) {
+    pub fn set(&mut self, k: &str, v: &str) {
+        self.state.insert(k.to_string(), v.to_string());
+    }
+
+    pub fn get(&self, k: &str) -> Option<&String> {
+        self.state.get(k)
+    }
+
+    pub fn run(&mut self) {
         let (http_server, mut workers_handle) = serve("127.0.0.1:8080").unwrap();
 
         let server = self.server.clone();
@@ -120,32 +149,32 @@ impl Bot {
         let handle = server.lock().unwrap().connect(tx).unwrap();
         loop {
             let msg = rx.recv().unwrap();
-            let message = msg.trim();
+            let text = msg.trim();
 
-            if has_shutdown(&self.name, &message.to_lowercase()) {
+            if has_shutdown(&self.name, &text.to_lowercase()) {
                 self.shutdown(Some(msg));
                 break;
             }
 
             for (pattern, cb) in &self.resp {
-                if let Some(caps) = pattern.0.captures(message) {
+                if let Some(caps) = pattern.0.captures(text) {
                     cb(
                         self,
                         msg.channel.clone(),
                         msg.nick.clone(),
-                        message.to_string(),
+                        text.to_string(),
                         caps,
                     );
                 }
             }
 
             for (pattern, cb) in &self.reaction {
-                if let Some(caps) = pattern.0.captures(message) {
+                if let Some(caps) = pattern.0.captures(text) {
                     cb(
                         self,
                         msg.channel.clone(),
                         msg.nick.clone(),
-                        message.to_string(),
+                        text.to_string(),
                         caps,
                     );
                 }
@@ -168,6 +197,15 @@ impl Bot {
             self.send(&msg.channel, "bye");
         }
         self.server.lock().unwrap().disconnect();
+
+        // dump state to file
+        let mut f = File::options()
+            .create(true)
+            .write(true)
+            .open(STATE_FILE)
+            .unwrap();
+        let data = bincode::serialize(&self.state).expect("state serialize fail");
+        f.write_all(&data).expect("write state file fail");
     }
 
     pub fn finalize(&self, handles: Vec<JoinHandle<()>>) {
